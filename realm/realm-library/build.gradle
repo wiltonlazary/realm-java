@@ -29,6 +29,7 @@ android {
     packagingOptions {
         exclude 'META-INF/LICENSE.txt'
     }
+
     buildTypes {
         debug {
             testCoverageEnabled = true
@@ -55,12 +56,12 @@ dependencies {
     androidTestCompile 'com.android.support.test:rules:0.4.1'
     androidTestCompile 'com.google.dexmaker:dexmaker:1.2'
     androidTestCompile 'com.google.dexmaker:dexmaker-mockito:1.2'
+    androidTestCompile 'junit:junit:4.12'
+    androidTestCompile 'dk.ilios:spanner:0.6.0'
 
     androidTestApt project(':realm-annotations-processor')
     androidTestApt project(':realm-annotations')
-s
-    androidTestCompile 'junit:junit:4.12'
-    androidTestCompile 'dk.ilios:spanner:0.6.0'
+
 }
 
 task sourcesJar(type: Jar) {
