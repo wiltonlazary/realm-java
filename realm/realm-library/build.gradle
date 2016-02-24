@@ -5,6 +5,7 @@ apply plugin: 'maven-publish'
 apply plugin: 'com.github.dcendents.android-maven'
 apply plugin: 'maven'
 apply plugin: 'findbugs'
+apply plugin: 'pmd'
 apply plugin: 'checkstyle'
 
 android {
@@ -14,7 +15,8 @@ android {
     defaultConfig {
         minSdkVersion 9
         targetSdkVersion 23
-        project.archivesBaseName = "realm-android"
+        project.archivesBaseName = "realm-android-library"
+        consumerProguardFiles 'proguard-rules.pro'
         testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
     }
 
@@ -27,18 +29,36 @@ android {
     packagingOptions {
         exclude 'META-INF/LICENSE.txt'
     }
+    buildTypes {
+        debug {
+            testCoverageEnabled = true
+        }
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+repositories {
+    maven { url "https://jitpack.io" }
 }
 
 dependencies {
-    compile 'com.intellij:annotations:+@jar'
+    provided 'io.reactivex:rxjava:1.1.0'
     compile project(':realm-annotations')
+    compile 'com.github.KeepSafe:ReLinker:1.1'
+
+    androidTestCompile 'io.reactivex:rxjava:1.1.0'
+    androidTestCompile 'com.android.support:support-annotations:23.1.1'
+    androidTestCompile 'com.android.support.test:runner:0.4.1'
+    androidTestCompile 'com.android.support.test:rules:0.4.1'
+    androidTestCompile 'com.google.dexmaker:dexmaker:1.2'
+    androidTestCompile 'com.google.dexmaker:dexmaker-mockito:1.2'
 
     androidTestApt project(':realm-annotations-processor')
     androidTestApt project(':realm-annotations')
-
-    androidTestCompile 'com.android.support:support-annotations:23.0.1'
-    androidTestCompile 'com.android.support.test:runner:0.4.1'
-    androidTestCompile 'com.android.support.test:rules:0.4.1'
+s
     androidTestCompile 'junit:junit:4.12'
     androidTestCompile 'dk.ilios:spanner:0.6.0'
 }
@@ -52,7 +72,14 @@ task javadoc(type: Javadoc) {
     source android.sourceSets.main.java.srcDirs
     source "../realm-annotations/src/main/java"
     classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
-    options.memberLevel = JavadocMemberLevel.PUBLIC
+    options {
+        title = "Realm ${project.version}"
+        memberLevel = JavadocMemberLevel.PUBLIC
+        docEncoding = 'UTF-8'
+        encoding = 'UTF-8'
+        charSet = 'UTF-8'
+        locale = 'en_US'
+    }
     exclude '**/internal/**'
     exclude '**/BuildConfig.java'
     exclude '**/R.java'
@@ -65,22 +92,14 @@ task javadocJar(type: Jar, dependsOn: javadoc) {
 
 preBuild.dependsOn ':realm-jni:buildAndroidJni'
 
-uploadArchives {
-    repositories {
-        mavenDeployer {
-            repository(url: "file://localhost${System.env.ANDROID_HOME}/extras/android/m2repository")
-        }
-    }
-}
-
 task findbugs(type: FindBugs) {
-    dependsOn assemble
-    group = 'Test'
+    dependsOn assembleDebug
+    group = 'Verification'
 
     ignoreFailures = false
     effort = "default"
     reportLevel = "medium"
-    excludeFilter = file("${projectDir}/findbugs-filter.xml")
+    excludeFilter = file("${projectDir}/../config/findbugs/findbugs-filter.xml")
     classes = files("${projectDir}/build/intermediates/classes")
     source = fileTree('src/main/java/')
     classpath = files()
@@ -96,6 +115,19 @@ task findbugs(type: FindBugs) {
     }
 }
 
+task pmd(type: Pmd) {
+    group = 'Verification'
+
+    source = fileTree('src/main/java')
+    ruleSetFiles = files("${projectDir}/../config/pmd/ruleset.xml")
+    ruleSets = [] // This needs to be here to remove the default checks
+
+    reports {
+        xml.enabled = false
+        html.enabled = true
+    }
+}
+
 task checkstyle(type: Checkstyle) {
     group = 'Test'
 
@@ -107,6 +139,8 @@ task checkstyle(type: Checkstyle) {
 
     def configProps = ['proj.module.dir': projectDir.absolutePath]
     configProperties configProps
+
+    configFile = file("${projectDir}/../config/checkstyle/checkstyle.xml")
 
     // empty classpath
     classpath = files()

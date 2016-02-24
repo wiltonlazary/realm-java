@@ -22,8 +22,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,12 +42,18 @@ import io.realm.internal.Util;
  */
 public class CompositeMediator extends RealmProxyMediator {
 
-    Map<Class<? extends RealmObject>, RealmProxyMediator> mediators = new HashMap<Class<? extends RealmObject>, RealmProxyMediator>();
+    private final Map<Class<? extends RealmObject>, RealmProxyMediator> mediators;
 
-    public void addMediator(RealmProxyMediator mediator) {
-        for (Class<? extends RealmObject> realmClass : mediator.getModelClasses()) {
-            mediators.put(realmClass, mediator);
+    public CompositeMediator(RealmProxyMediator... mediators) {
+        final HashMap<Class<? extends RealmObject>, RealmProxyMediator> tempMediators = new HashMap<>();
+        if (mediators != null) {
+            for (RealmProxyMediator mediator : mediators) {
+                for (Class<? extends RealmObject> realmClass : mediator.getModelClasses()) {
+                    tempMediators.put(realmClass, mediator);
+                }
+            }
         }
+        this.mediators = Collections.unmodifiableMap(tempMediators);
     }
 
     @Override
@@ -82,7 +88,7 @@ public class CompositeMediator extends RealmProxyMediator {
 
     @Override
     public Set<Class<? extends RealmObject>> getModelClasses() {
-        return new HashSet<Class<? extends RealmObject>>(mediators.keySet());
+        return mediators.keySet();
     }
 
     @Override
@@ -101,6 +107,12 @@ public class CompositeMediator extends RealmProxyMediator {
     public <E extends RealmObject> E createUsingJsonStream(Class<E> clazz, Realm realm, JsonReader reader) throws IOException {
         RealmProxyMediator mediator = getMediator(clazz);
         return mediator.createUsingJsonStream(clazz, realm, reader);
+    }
+
+    @Override
+    public <E extends RealmObject> E createDetachedCopy(E realmObject, int maxDepth, Map<RealmObject, RealmObjectProxy.CacheData<RealmObject>> cache) {
+        RealmProxyMediator mediator = getMediator(Util.getOriginalModelClass(realmObject.getClass()));
+        return mediator.createDetachedCopy(realmObject, maxDepth, cache);
     }
 
     // Returns the mediator for a given model class (not RealmProxy) or throws exception

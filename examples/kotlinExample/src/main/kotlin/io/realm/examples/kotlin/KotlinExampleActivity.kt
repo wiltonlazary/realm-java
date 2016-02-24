@@ -22,6 +22,7 @@ import android.util.Log
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.realm.Realm
+import io.realm.Sort
 import io.realm.RealmConfiguration
 import io.realm.examples.kotlin.model.Cat
 import io.realm.examples.kotlin.model.Dog
@@ -39,6 +40,7 @@ public class KotlinExampleActivity : Activity() {
 
     private var rootLayout: LinearLayout by Delegates.notNull()
     private var realm: Realm by Delegates.notNull()
+    private var realmConfig: RealmConfiguration by Delegates.notNull()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,11 +52,11 @@ public class KotlinExampleActivity : Activity() {
         // we can generally safely run them on the UI thread.
 
         // Create configuration and reset Realm.
-        val config = RealmConfiguration.Builder(this).build()
-        Realm.deleteRealm(config)
+        realmConfig = RealmConfiguration.Builder(this).build()
+        Realm.deleteRealm(realmConfig)
 
-        // Open the default realm for the UI thread.
-        realm = Realm.getInstance(this)
+        // Open the realm for the UI thread.
+        realm = Realm.getInstance(realmConfig)
 
         basicCRUD(realm)
         basicQuery(realm)
@@ -69,7 +71,7 @@ public class KotlinExampleActivity : Activity() {
 
         // More complex operations can be executed on another thread, for example using
         // Anko's async extension method.
-        async {
+        async() {
             var info: String
             info = complexReadWrite()
             info += complexQuery()
@@ -142,7 +144,7 @@ public class KotlinExampleActivity : Activity() {
 
         // Open the default realm. All threads must use it's own reference to the realm.
         // Those can not be transferred across threads.
-        val realm = Realm.getInstance(this)
+        val realm = Realm.getInstance(realmConfig)
 
         // Add ten persons in one transaction
         realm.beginTransaction()
@@ -186,7 +188,7 @@ public class KotlinExampleActivity : Activity() {
 
         // Sorting
         val sortedPersons = realm.allObjects(Person::class.java)
-        sortedPersons.sort("age", false)
+        sortedPersons.sort("age", Sort.DESCENDING)
         check(realm.allObjects(Person::class.java).last().name == sortedPersons.first().name)
         status += "\nSorting ${sortedPersons.last().name} == ${realm.allObjects(Person::class.java).first().name}"
 
@@ -199,7 +201,7 @@ public class KotlinExampleActivity : Activity() {
 
         // Realm implements the Closable interface, therefore we can make use of Kotlin's built-in
         // extension method 'use' (pun intended).
-        Realm.getInstance(this).use {
+        Realm.getInstance(realmConfig).use {
             // 'it' is the implicit lambda parameter of type Realm
             status += "\nNumber of persons: ${it.allObjects(Person::class.java).size}"
 

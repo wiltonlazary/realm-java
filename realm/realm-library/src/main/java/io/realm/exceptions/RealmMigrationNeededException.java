@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package io.realm.exceptions;
 
 import java.io.File;
@@ -38,14 +39,6 @@ public class RealmMigrationNeededException extends RuntimeException {
      * Returns the canonical path to the Realm file that needs to be migrated.
      *
      * This can be used for easy reference during a migration:
-     *
-     * <pre>
-     * try {
-     *   Realm.getInstance(context);
-     * } catch (RealmMigrationNeededException e) {
-     *   Realm.migrateRealmAtPath(e.getRealmPath(), new CustomMigration());
-     * }
-     * </pre>
      *
      * @return Canonical path to the Realm file.
      * @see File#getCanonicalPath()

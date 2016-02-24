@@ -19,6 +19,9 @@ package io.realm.internal;
 import java.io.Closeable;
 import java.util.Date;
 
+import io.realm.Case;
+import io.realm.Sort;
+
 public class TableQuery implements Closeable {
     protected boolean DEBUG = false;
 
@@ -55,7 +58,6 @@ public class TableQuery implements Closeable {
         this.nativePtr = nativeQueryPtr;
         this.origin = origin;
     }
-
 
     public void close() {
         synchronized (context) {
@@ -343,8 +345,8 @@ public class TableQuery implements Closeable {
     private final static String STRING_NULL_ERROR_MESSAGE = "String value in query criteria must not be null.";
 
     // Equal
-    public TableQuery equalTo(long[] columnIndexes, String value, boolean caseSensitive) {
-        nativeEqual(nativePtr, columnIndexes, value, caseSensitive);
+    public TableQuery equalTo(long[] columnIndexes, String value, Case caseSensitive) {
+        nativeEqual(nativePtr, columnIndexes, value, caseSensitive.getValue());
         queryValidated = false;
         return this;
     }
@@ -356,8 +358,8 @@ public class TableQuery implements Closeable {
     }
 
     // Not Equal
-    public TableQuery notEqualTo(long columnIndex[], String value, boolean caseSensitive) {
-        nativeNotEqual(nativePtr, columnIndex, value, caseSensitive);
+    public TableQuery notEqualTo(long columnIndex[], String value, Case caseSensitive) {
+        nativeNotEqual(nativePtr, columnIndex, value, caseSensitive.getValue());
         queryValidated = false;
         return this;
     }
@@ -367,8 +369,8 @@ public class TableQuery implements Closeable {
         return this;
     }
 
-    public TableQuery beginsWith(long columnIndices[], String value, boolean caseSensitive) {
-        nativeBeginsWith(nativePtr, columnIndices, value, caseSensitive);
+    public TableQuery beginsWith(long columnIndices[], String value, Case caseSensitive) {
+        nativeBeginsWith(nativePtr, columnIndices, value, caseSensitive.getValue());
         queryValidated = false;
         return this;
     }
@@ -379,8 +381,8 @@ public class TableQuery implements Closeable {
         return this;
     }
 
-    public TableQuery endsWith(long columnIndices[], String value, boolean caseSensitive) {
-        nativeEndsWith(nativePtr, columnIndices, value, caseSensitive);
+    public TableQuery endsWith(long columnIndices[], String value, Case caseSensitive) {
+        nativeEndsWith(nativePtr, columnIndices, value, caseSensitive.getValue());
         queryValidated = false;
         return this;
     }
@@ -391,8 +393,8 @@ public class TableQuery implements Closeable {
         return this;
     }
 
-    public TableQuery contains(long columnIndices[], String value, boolean caseSensitive) {
-        nativeContains(nativePtr, columnIndices, value, caseSensitive);
+    public TableQuery contains(long columnIndices[], String value, Case caseSensitive) {
+        nativeContains(nativePtr, columnIndices, value, caseSensitive.getValue());
         queryValidated = false;
         return this;
     }
@@ -409,6 +411,10 @@ public class TableQuery implements Closeable {
         return this;
     }
 
+    public TableQuery isNotEmpty(long[] columnIndices) {
+        return not().isEmpty(columnIndices);
+    }
+
     // Searching methods.
 
     public long find(long fromTableRow) {
@@ -422,12 +428,12 @@ public class TableQuery implements Closeable {
     }
 
     /**
-     * Perform a find query then handover the resulted Row (ready to be imported by another
-     * thread/shared_group).
-     * @param bgSharedGroupPtr current shared_group from which to operate the query
-     * @param nativeReplicationPtr replication pointer associated with the shared_group
-     * @param ptrQuery query to run the the find against
-     * @return pointer to the handover result (table_view)
+     * Performs a find query then handover the resulted Row (ready to be imported by another thread/shared_group).
+     *
+     * @param bgSharedGroupPtr current shared_group from which to operate the query.
+     * @param nativeReplicationPtr replication pointer associated with the shared_group.
+     * @param ptrQuery query to run the the find against.
+     * @return pointer to the handover result (table_view).
      */
     public long findWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long ptrQuery) {
         validateQuery();
@@ -481,25 +487,25 @@ public class TableQuery implements Closeable {
         return nativeGetDistinctViewWithHandover(bgSharedGroupPtr, nativeReplicationPtr, ptrQuery, columnIndex);
     }
 
-    public long findAllSortedWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long ptrQuery, long columnIndex, boolean ascending) {
+    public long findAllSortedWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long ptrQuery, long columnIndex, Sort sortOrder) {
         validateQuery();
         // Execute the disposal of abandoned realm objects each time a new realm object is created
         context.executeDelayedDisposal();
-        return nativeFindAllSortedWithHandover(bgSharedGroupPtr, nativeReplicationPtr, ptrQuery, 0, Table.INFINITE, Table.INFINITE, columnIndex, ascending);
+        return nativeFindAllSortedWithHandover(bgSharedGroupPtr, nativeReplicationPtr, ptrQuery, 0, Table.INFINITE, Table.INFINITE, columnIndex, sortOrder.getValue());
     }
 
-    public long findAllMultiSortedWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long ptrQuery, long[] columnIndices, boolean[] ascending) {
+    public long findAllMultiSortedWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long ptrQuery, long[] columnIndices, Sort[] sortOrders) {
         validateQuery();
         // Execute the disposal of abandoned realm objects each time a new realm object is created
         context.executeDelayedDisposal();
-        return nativeFindAllMultiSortedWithHandover(bgSharedGroupPtr, nativeReplicationPtr, ptrQuery, 0, Table.INFINITE, Table.INFINITE, columnIndices, ascending);
+        boolean[] ascendings = getNativeSortOrderValues(sortOrders);
+        return nativeFindAllMultiSortedWithHandover(bgSharedGroupPtr, nativeReplicationPtr, ptrQuery, 0, Table.INFINITE, Table.INFINITE, columnIndices, ascendings);
     }
 
     // Suppose to be called from the caller SharedGroup thread
     public TableView importHandoverTableView(long handoverPtr, long callerSharedGroupPtr) {
-        long nativeTvPtr = 0;
+        long nativeTvPtr = nativeImportHandoverTableViewIntoSharedGroup(handoverPtr, callerSharedGroupPtr);
         try {
-            nativeTvPtr = nativeImportHandoverTableViewIntoSharedGroup(handoverPtr, callerSharedGroupPtr);
             return new TableView(this.context, this.table, nativeTvPtr);
         } catch (RuntimeException e) {
             if (nativeTvPtr != 0) {
@@ -510,7 +516,8 @@ public class TableQuery implements Closeable {
     }
 
     /**
-     * Handover the query, so it can be used by other SharedGroup (in different thread)
+     * Handovers the query, so it can be used by other SharedGroup (in different thread)
+     *
      * @param callerSharedGroupPtr native pointer to the SharedGroup holding the query
      * @return native pointer to the handover query
      */
@@ -711,6 +718,17 @@ public class TableQuery implements Closeable {
         return nativeRemove(nativePtr, 0, Table.INFINITE, Table.INFINITE);
     }
 
+    /**
+     * Converts a list of sort orders to their native values.
+     */
+    public static boolean[] getNativeSortOrderValues(Sort[] sortOrders) {
+        boolean[] nativeValues = new boolean[sortOrders.length];
+        for (int i = 0; i < sortOrders.length; i++) {
+            nativeValues[i] = sortOrders[i].getValue();
+        }
+        return nativeValues;
+    }
+
     private void throwImmutable() {
         throw new IllegalStateException("Mutable method call during read transaction.");
     }
@@ -787,5 +805,6 @@ public class TableQuery implements Closeable {
     public static native long nativeFindWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long nativeQueryPtr, long fromTableRow);
     public static native long nativeFindAllMultiSortedWithHandover(long bgSharedGroupPtr, long nativeReplicationPtr, long nativeQueryPtr, long start, long end, long limit, long[] columnIndices, boolean[] ascending);
     public static native long nativeImportHandoverRowIntoSharedGroup(long handoverRowPtr, long callerSharedGroupPtr);
-    public static native void nativeCloseQueryHandover (long nativePtr);
+    public static native void nativeCloseQueryHandover(long nativePtr);
+    public static native long[] nativeBatchUpdateQueries(long bgSharedGroupPtr, long nativeReplicationPtr, long[] handoverQueries, long[][] parameters, long[][] queriesParameters, boolean[][] multiSortOrder);
 }

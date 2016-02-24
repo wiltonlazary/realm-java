@@ -28,10 +28,10 @@ using namespace realm;
 #define VIEW_VALID_AND_IN_SYNC(env, ptr) view_valid_and_in_sync(env, ptr)
 
 inline bool view_valid_and_in_sync(JNIEnv* env, jlong nativeViewPtr) {
-    bool valid = (nativeViewPtr != 0);
+    bool valid = (TV(nativeViewPtr) != NULL);
     if (valid) {
         if (!TV(nativeViewPtr)->is_attached()) {
-            ThrowException(env, TableInvalid, "Table is closed, and no longer valid to operate on.");
+            ThrowException(env, TableInvalid, "The Realm has been closed and is no longer accessible.");
             return false;
         }
         TV(nativeViewPtr)->sync_if_needed();
@@ -47,6 +47,32 @@ JNIEXPORT jlong JNICALL Java_io_realm_internal_TableView_createNativeTableView(
         return reinterpret_cast<jlong>( new TableView() );
     } CATCH_STD()
     return 0;
+}
+
+JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativeDistinct(
+    JNIEnv* env, jobject, jlong nativeViewPtr, jlong columnIndex)
+{
+    if (!VIEW_VALID_AND_IN_SYNC(env, nativeViewPtr))
+        return;
+    if (!COL_INDEX_VALID(env, TV(nativeViewPtr), columnIndex))
+        return;
+    if (!TV(nativeViewPtr)->get_parent().has_search_index(S(columnIndex))) {
+        ThrowException(env, UnsupportedOperation, "The field must be indexed before distinct() can be used.");
+        return;
+    }
+    try {
+        switch (TV(nativeViewPtr)->get_column_type(S(columnIndex))) {
+            case type_Bool:
+            case type_Int:
+            case type_DateTime:
+            case type_String:
+                TV(nativeViewPtr)->distinct(S(columnIndex));
+                break;
+            default:
+                ThrowException(env, IllegalArgument, "Invalid type - Only String, Date, boolean, byte, short, int, long and their boxed variants are supported.");
+                break;
+        }
+    } CATCH_STD()
 }
 
 JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativePivot(
@@ -106,9 +132,9 @@ JNIEXPORT jlong JNICALL Java_io_realm_internal_TableView_nativeGetSourceRowIndex
 {
     try {
         if (!VIEW_VALID_AND_IN_SYNC(env, nativeViewPtr))
-            return 0;
+            return npos;
         if (!ROW_INDEX_VALID(env, TV(nativeViewPtr), rowIndex))
-            return 0;
+            return npos;
     } CATCH_STD()
     return TV(nativeViewPtr)->get_source_ndx(S(rowIndex));   // noexcept
 }
@@ -470,7 +496,7 @@ JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativeClear(
     try {
         if (!VIEW_VALID_AND_IN_SYNC(env, nativeViewPtr))
             return;
-        TV(nativeViewPtr)->clear();
+        TV(nativeViewPtr)->clear(RemoveMode::unordered);
     } CATCH_STD()
 }
 
@@ -481,7 +507,7 @@ JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativeRemoveRow(
         if (!VIEW_VALID_AND_IN_SYNC(env, nativeViewPtr) ||
             !ROW_INDEX_VALID(env, TV(nativeViewPtr), rowIndex))
             return;
-        TV(nativeViewPtr)->remove( S(rowIndex));
+        TV(nativeViewPtr)->remove( S(rowIndex), RemoveMode::unordered);
     } CATCH_STD()
 }
 
@@ -892,11 +918,10 @@ JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativeSortMulti(
         if (!VIEW_VALID_AND_IN_SYNC(env, nativeViewPtr))
             return;
 
-        jsize arr_len = env->GetArrayLength(columnIndices);
-        jsize asc_len = env->GetArrayLength(ascending);
-
-        jlong *long_arr = env->GetLongArrayElements(columnIndices, NULL);
-        jboolean *bool_arr = env->GetBooleanArrayElements(ascending, NULL);
+        JniLongArray long_arr(env, columnIndices);
+        JniBooleanArray bool_arr(env, ascending);
+        jsize arr_len = long_arr.len();
+        jsize asc_len = bool_arr.len();
 
         if (arr_len == 0) {
             ThrowException(env, IllegalArgument, "You must provide at least one field name.");
@@ -915,8 +940,9 @@ JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativeSortMulti(
         std::vector<bool> ascendings;
 
         for (int i = 0; i < arr_len; ++i) {
-            if (!COL_INDEX_VALID(env, TV(nativeViewPtr), long_arr[i]))
+            if (!COL_INDEX_VALID(env, TV(nativeViewPtr), long_arr[i])) {
                 return;
+            }
             int colType = TV(nativeViewPtr)->get_column_type( S(long_arr[i]) );
             switch (colType) {
                 case type_Bool:
@@ -934,8 +960,6 @@ JNIEXPORT void JNICALL Java_io_realm_internal_TableView_nativeSortMulti(
             }
         }
         TV(nativeViewPtr)->sort(indices, ascendings);
-        env->ReleaseLongArrayElements(columnIndices, long_arr, 0);
-        env->ReleaseBooleanArrayElements(ascending, bool_arr, 0);
     } CATCH_STD()
 }
 
@@ -1005,10 +1029,10 @@ JNIEXPORT jlong JNICALL Java_io_realm_internal_TableView_nativeWhere(
 JNIEXPORT jlong JNICALL Java_io_realm_internal_TableView_nativeSync(
     JNIEnv* env, jobject, jlong nativeViewPtr)
 {
-    bool valid = (nativeViewPtr != 0);
+    bool valid = (TV(nativeViewPtr) != NULL);
     if (valid) {
         if (!TV(nativeViewPtr)->is_attached()) {
-            ThrowException(env, TableInvalid, "Table is closed, and no longer valid to operate on.");
+            ThrowException(env, TableInvalid, "The Realm has been closed and is no longer accessible.");
             return 0;
         }
     }
@@ -1016,4 +1040,18 @@ JNIEXPORT jlong JNICALL Java_io_realm_internal_TableView_nativeSync(
         return (jlong) TV(nativeViewPtr)->sync_if_needed();
     } CATCH_STD()
     return 0;
+}
+
+JNIEXPORT jlong JNICALL Java_io_realm_internal_TableView_nativeFindBySourceNdx
+        (JNIEnv *env, jobject, jlong nativeViewPtr, jlong sourceIndex)
+{
+    TR_ENTER_PTR(nativeViewPtr);
+    try {
+        if (!VIEW_VALID_AND_IN_SYNC(env, nativeViewPtr) || !ROW_INDEX_VALID(env, &(TV(nativeViewPtr)->get_parent()), sourceIndex))
+            return -1;
+
+        size_t ndx = TV(nativeViewPtr)->find_by_source_ndx(sourceIndex);
+        return to_jlong_or_not_found(ndx);
+    } CATCH_STD()
+    return -1;
 }

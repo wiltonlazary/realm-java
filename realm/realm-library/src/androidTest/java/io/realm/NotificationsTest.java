@@ -13,14 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package io.realm;
 
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
-import android.test.AndroidTestCase;
+import android.support.test.annotation.UiThreadTest;
+import android.support.test.rule.UiThreadTestRule;
+import android.support.test.runner.AndroidJUnit4;
 import android.util.Log;
 
 import junit.framework.AssertionFailedError;
+
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.runner.RunWith;
 
 import java.lang.ref.WeakReference;
 import java.util.Map;
@@ -40,30 +50,49 @@ import io.realm.entities.AllTypes;
 import io.realm.entities.Dog;
 import io.realm.internal.log.Logger;
 import io.realm.internal.log.RealmLog;
+import io.realm.rule.RunInLooperThread;
+import io.realm.rule.RunTestInLooperThread;
+import io.realm.rule.TestRealmConfigurationFactory;
 
-public class NotificationsTest extends AndroidTestCase {
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+@RunWith(AndroidJUnit4.class)
+public class NotificationsTest {
+
+    @Rule
+    public final UiThreadTestRule uiThreadTestRule = new UiThreadTestRule();
+    @Rule
+    public final RunInLooperThread looperThread = new RunInLooperThread();
+    @Rule
+    public final TestRealmConfigurationFactory configFactory = new TestRealmConfigurationFactory();
 
     private Realm realm;
+    private RealmConfiguration realmConfig;
 
-    @Override
-    protected void setUp() throws Exception {
-        Realm.deleteRealm(TestHelper.createConfiguration(getContext()));
+    @Before
+    public void setUp() {
+        realmConfig = configFactory.createConfiguration();
     }
 
-    @Override
-    protected void tearDown() throws Exception {
-        super.tearDown();
+    @After
+    public void tearDown() {
         if (realm != null) {
             realm.close();
         }
     }
 
-    public void testFailingSetAutoRefreshOnNonLooperThread() throws ExecutionException, InterruptedException {
+    @Test
+    public void failingSetAutoRefreshOnNonLooperThread() throws ExecutionException, InterruptedException {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<Boolean> future = executorService.submit(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
-                Realm realm = Realm.getInstance(getContext());
+                Realm realm = Realm.getInstance(realmConfig);
                 boolean autoRefresh = realm.isAutoRefresh();
                 assertFalse(autoRefresh);
                 try {
@@ -76,17 +105,19 @@ public class NotificationsTest extends AndroidTestCase {
                 }
             }
         });
+
         assertTrue(future.get());
-        assertTrue(Realm.realmsCache.get().isEmpty());
+        RealmCache.invokeWithGlobalRefCount(realmConfig, new TestHelper.ExpectedCountCallback(0));
     }
 
-    public void testSetAutoRefreshOnHandlerThread() throws ExecutionException, InterruptedException {
+    @Test
+    public void setAutoRefresh_onHandlerThread() throws ExecutionException, InterruptedException {
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<Boolean> future = executorService.submit(new Callable<Boolean>() {
             @Override
             public Boolean call() throws Exception {
                 Looper.prepare();
-                Realm realm = Realm.getInstance(getContext());
+                Realm realm = Realm.getInstance(realmConfig);
                 assertTrue(realm.isAutoRefresh());
                 realm.setAutoRefresh(false);
                 assertFalse(realm.isAutoRefresh());
@@ -96,12 +127,15 @@ public class NotificationsTest extends AndroidTestCase {
                 return true;
             }
         });
+
         assertTrue(future.get());
-        assertTrue(Realm.realmsCache.get().isEmpty());
+        RealmCache.invokeWithGlobalRefCount(realmConfig, new TestHelper.ExpectedCountCallback(0));
     }
 
-    public void testRemoveNotifications () throws InterruptedException, ExecutionException {
-        final AtomicInteger counter= new AtomicInteger(0);
+    @Test
+    @UiThreadTest
+    public void removeChangeListener() throws InterruptedException, ExecutionException {
+        final AtomicInteger counter = new AtomicInteger(0);
         RealmChangeListener listener = new RealmChangeListener() {
             @Override
             public void onChange() {
@@ -109,7 +143,7 @@ public class NotificationsTest extends AndroidTestCase {
             }
         };
 
-        realm = Realm.getInstance(getContext());
+        realm = Realm.getInstance(realmConfig);
         realm.addChangeListener(listener);
         realm.removeChangeListener(listener);
 
@@ -120,8 +154,10 @@ public class NotificationsTest extends AndroidTestCase {
         assertEquals(0, counter.get());
     }
 
-    public void testAddDuplicatedListener() {
-        final AtomicInteger counter= new AtomicInteger(0);
+    @Test
+    @RunTestInLooperThread
+    public void addChangeListener_duplicatedListener() {
+        final AtomicInteger counter = new AtomicInteger(0);
         RealmChangeListener listener = new RealmChangeListener() {
             @Override
             public void onChange() {
@@ -129,18 +165,24 @@ public class NotificationsTest extends AndroidTestCase {
             }
         };
 
-        realm = Realm.getInstance(getContext());
+        Realm realm = looperThread.realm;
         realm.addChangeListener(listener);
         realm.addChangeListener(listener);
+        realm.addChangeListener(new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                assertEquals(1, counter.get());
+                looperThread.testComplete();
+            }
+        });
 
         realm.beginTransaction();
         realm.createObject(AllTypes.class);
         realm.commitTransaction();
-
-        assertEquals(1, counter.get());
     }
 
-    public void testNotificationsNumber() throws InterruptedException, ExecutionException {
+    @Test
+    public void notificationsNumber() throws InterruptedException, ExecutionException {
         final AtomicInteger counter = new AtomicInteger(0);
         final AtomicBoolean isReady = new AtomicBoolean(false);
         final Looper[] looper = new Looper[1];
@@ -160,7 +202,7 @@ public class NotificationsTest extends AndroidTestCase {
                 try {
                     Looper.prepare();
                     looper[0] = Looper.myLooper();
-                    realm = Realm.getInstance(getContext());
+                    realm = Realm.getInstance(realmConfig);
                     realm.addChangeListener(listener);
                     isReady.set(true);
                     Looper.loop();
@@ -181,7 +223,7 @@ public class NotificationsTest extends AndroidTestCase {
         Thread.sleep(100);
 
         // Trigger OnRealmChanged on background thread
-        realm = Realm.getInstance(getContext());
+        realm = Realm.getInstance(realmConfig);
         realm.beginTransaction();
         Dog dog = realm.createObject(Dog.class);
         dog.setName("Rex");
@@ -201,10 +243,11 @@ public class NotificationsTest extends AndroidTestCase {
         }
 
         assertEquals(1, counter.get());
-        assertTrue(Realm.realmsCache.get().isEmpty());
+        RealmCache.invokeWithGlobalRefCount(realmConfig, new TestHelper.ExpectedCountCallback(0));
     }
 
-    public void testAutoUpdateRealmResults() throws InterruptedException, ExecutionException {
+    @Test
+    public void autoUpdateRealmResults() throws InterruptedException, ExecutionException {
         final int TEST_SIZE = 10;
         final AtomicInteger counter = new AtomicInteger(0);
         final AtomicBoolean isReady = new AtomicBoolean(false);
@@ -222,7 +265,7 @@ public class NotificationsTest extends AndroidTestCase {
                 looper[0] = Looper.myLooper();
                 Realm realm = null;
                 try {
-                    realm = Realm.getInstance(getContext());
+                    realm = Realm.getInstance(realmConfig);
                     final RealmResults<Dog> dogs = realm.allObjects(Dog.class);
                     assertEquals(0, dogs.size());
                     listener[0] = new RealmChangeListener() {
@@ -251,7 +294,7 @@ public class NotificationsTest extends AndroidTestCase {
         }
         Thread.sleep(100);
 
-        Realm realm = Realm.getInstance(getContext());
+        Realm realm = Realm.getInstance(realmConfig);
         realm.beginTransaction();
         for (int i = 0; i < TEST_SIZE; i++) {
             Dog dog = realm.createObject(Dog.class);
@@ -279,11 +322,11 @@ public class NotificationsTest extends AndroidTestCase {
         assertEquals(TEST_SIZE, results.get(1).intValue());
 
         assertEquals(1, counter.get());
-        assertTrue(Realm.realmsCache.get().isEmpty());
+        RealmCache.invokeWithGlobalRefCount(realmConfig, new TestHelper.ExpectedCountCallback(0));
     }
 
-    // TODO Disabled until we can figure out why this times out so often on the build server
-    public void DISABLEDtestCloseClearingHandlerMessages() throws InterruptedException, TimeoutException, ExecutionException {
+    @Test
+    public void closeClearingHandlerMessages() throws InterruptedException, TimeoutException, ExecutionException {
         final int TEST_SIZE = 10;
         final CountDownLatch backgroundLooperStarted = new CountDownLatch(1);
         final CountDownLatch addHandlerMessages = new CountDownLatch(1);
@@ -293,7 +336,7 @@ public class NotificationsTest extends AndroidTestCase {
             @Override
             public Boolean call() throws Exception {
                 Looper.prepare(); // Fake background thread with a looper, eg. a IntentService
-                Realm realm = Realm.getInstance(getContext());
+                Realm realm = Realm.getInstance(realmConfig);
                 backgroundLooperStarted.countDown();
 
                 // Random operation in the client code
@@ -316,7 +359,7 @@ public class NotificationsTest extends AndroidTestCase {
                 threadHandler.post(new Runnable() {
                     @Override
                     public void run() {
-                        Looper.myLooper().quit();
+                        TestHelper.quitLooperOrFail();
                     }
                 });
 
@@ -333,7 +376,7 @@ public class NotificationsTest extends AndroidTestCase {
         backgroundLooperStarted.await(1, TimeUnit.SECONDS);
 
         // Execute a transaction that will trigger a Realm update
-        Realm realm = Realm.getInstance(getContext());
+        Realm realm = Realm.getInstance(realmConfig);
         realm.beginTransaction();
         for (int i = 0; i < TEST_SIZE; i++) {
             Dog dog = realm.createObject(Dog.class);
@@ -351,8 +394,10 @@ public class NotificationsTest extends AndroidTestCase {
         assertTrue(result);
     }
 
-    public void testHandlerNotRemovedToSoon() {
-        RealmConfiguration realmConfig = TestHelper.createConfiguration(getContext(), "private-realm");
+    @Test
+    @UiThreadTest
+    public void handlerNotRemovedToSoon() {
+        RealmConfiguration realmConfig = configFactory.createConfiguration("private-realm");
         Realm.deleteRealm(realmConfig);
         Realm instance1 = Realm.getInstance(realmConfig);
         Realm instance2 = Realm.getInstance(realmConfig);
@@ -367,41 +412,43 @@ public class NotificationsTest extends AndroidTestCase {
         assertNull(instance1.handler);
     }
 
-    public void testImmediateNotificationsOnSameThread() {
-        final AtomicBoolean success = new AtomicBoolean(false);
-        final RealmChangeListener listener[] = new RealmChangeListener[1];
-        realm = Realm.getInstance(getContext());
-        listener[0] = new RealmChangeListener() {
+    @Test
+    @RunTestInLooperThread
+    public void commitTransaction_delayChangeListenerOnSameThread() {
+        final AtomicInteger success = new AtomicInteger(0);
+        Realm realm = looperThread.realm;
+        realm.addChangeListener(new RealmChangeListener() {
             @Override
             public void onChange() {
-                // Listener should only be called once
-                assertFalse(success.get());
-                success.set(true);
+                assertEquals(1, success.get());
+                looperThread.testComplete();
             }
-        };
-        realm.addChangeListener(listener[0]);
+        });
         realm.beginTransaction();
         realm.createObject(AllTypes.class);
         realm.commitTransaction();
-        assertTrue(success.get());
+        assertEquals(0, success.getAndIncrement());
     }
 
-    public void testEmptyCommitTriggerChangeListener() {
-        final AtomicBoolean success = new AtomicBoolean(false);
+    @Test
+    @RunTestInLooperThread
+    public void emptyCommitTriggerChangeListener() {
         final RealmChangeListener listener = new RealmChangeListener() {
             @Override
             public void onChange() {
-                success.set(true);
+                looperThread.testComplete();
             }
         };
-        realm = Realm.getInstance(getContext());
+        Realm realm = looperThread.realm;
         realm.addChangeListener(listener);
         realm.beginTransaction();
         realm.commitTransaction();
-        assertTrue(success.get());
     }
 
-    public void testAddRemoveListenerConcurrency() {
+    @Test
+    @RunTestInLooperThread
+    public void addRemoveListenerConcurrency() {
+        final Realm realm = looperThread.realm;
         final AtomicInteger counter1 = new AtomicInteger(0);
         final AtomicInteger counter2 = new AtomicInteger(0);
         final AtomicInteger counter3 = new AtomicInteger(0);
@@ -413,7 +460,16 @@ public class NotificationsTest extends AndroidTestCase {
         final RealmChangeListener listener1 = new RealmChangeListener() {
             @Override
             public void onChange() {
+                // Step 7: Last listener called. Should only be called once
                 counter1.incrementAndGet();
+
+                // after listener2.onChange
+                // Since duplicated entries will be ignored, we still have:
+                // [listener2, listener1]
+                assertEquals(1, counter1.get());
+                assertEquals(2, counter2.get());
+                assertEquals(1, counter3.get());
+                looperThread.testComplete();
             }
         };
 
@@ -421,6 +477,9 @@ public class NotificationsTest extends AndroidTestCase {
         final RealmChangeListener listener2 = new RealmChangeListener() {
             @Override
             public void onChange() {
+                // Step 3: Listener2 called
+                // Listener state [listener2, listener3, listener1]
+                // Listener 1 will not be called this time around
                 counter2.incrementAndGet();
                 realm.addChangeListener(listener1);
             }
@@ -430,72 +489,169 @@ public class NotificationsTest extends AndroidTestCase {
         RealmChangeListener listener3 = new RealmChangeListener() {
             @Override
             public void onChange() {
+                // Step 4: Listener3 called
+                // Listener state [listener2, listener1]
                 counter3.incrementAndGet();
                 realm.removeChangeListener(this);
+
+                // Step 5: Assert proper state
+                // [listener2, listener1]
+                assertEquals(0, counter1.get());
+                assertEquals(1, counter2.get());
+                assertEquals(1, counter3.get());
+
+                // Step 6: Trigger next round of changes on [listener2, listener1]
+                realm.beginTransaction();
+                realm.createObject(AllTypes.class);
+                realm.commitTransaction();
             }
         };
 
-        realm = Realm.getInstance(getContext());
+        // Step 1: Add initial listeners
+        // Listener state [listener2, listener3]
         realm.addChangeListener(listener2);
         realm.addChangeListener(listener3);
 
+        // Step 2: Trigger change listeners
         realm.beginTransaction();
         realm.createObject(AllTypes.class);
-        // [listener2, listener3]
         realm.commitTransaction();
-        // after listener2.onChange
-        // [listener2, listener3, listener1]
-        // after listener3.onChange
-        // [listener2, listener1]
-        assertEquals(0, counter1.get());
-        assertEquals(1, counter2.get());
-        assertEquals(1, counter3.get());
-
-        realm.beginTransaction();
-        realm.createObject(AllTypes.class);
-        // [listener2, listener1]
-        realm.commitTransaction();
-        // after listener2.onChange
-        // Since duplicated entries will be ignored, we still have:
-        // [listener2, listener1]
-
-        assertEquals(1, counter1.get());
-        assertEquals(2, counter2.get());
-        assertEquals(1, counter3.get());
     }
 
-    public void testWeakReferenceListener() throws InterruptedException {
+    @Test
+    @RunTestInLooperThread
+    public void weakReferenceListener() throws InterruptedException {
+        final AtomicInteger weakCounter = new AtomicInteger(0);
+        final AtomicInteger strongCounter = new AtomicInteger(0);
+
+        final Realm realm = looperThread.realm;
+
+        // Setup weak listener
+        RealmChangeListener weakListener = new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                weakCounter.incrementAndGet();
+            }
+        };
+        realm.handlerController.addChangeListenerAsWeakReference(weakListener);
+        assertEquals(1, realm.handlerController.weakChangeListeners.size());
+
+        // This is not a weak listener so will be called. When this is triggered the weak references have not been
+        // removed yet. So make another change to ensure that they really are removed before validating.
+        realm.addChangeListener(new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                int count = strongCounter.incrementAndGet();
+                if (count == 1) {
+                    realm.beginTransaction();
+                    realm.createObject(AllTypes.class);
+                    realm.commitTransaction();
+                } else if (count == 2) {
+                    assertEquals(0, weakCounter.get());
+                    assertEquals(0, realm.handlerController.weakChangeListeners.size());
+                    looperThread.testComplete();
+                }
+            }
+        });
+
+        // Hack: There is no guaranteed way to release the WeakReference, just clear it.
+        for (WeakReference<RealmChangeListener> weakRef : realm.handlerController.weakChangeListeners) {
+            weakRef.clear();
+        }
+
+        // Trigger change listeners
+        realm.beginTransaction();
+        realm.createObject(AllTypes.class);
+        realm.commitTransaction();
+    }
+
+
+    // Test that that a WeakReferenceListener can be removed.
+    // This test is not a proper GC test, but just ensures that listeners can be removed from the list of weak listeners
+    // without throwing an exception.
+    @Test
+    @RunTestInLooperThread
+    public void removingWeakReferenceListener() throws InterruptedException {
         final AtomicInteger counter = new AtomicInteger(0);
-        realm = Realm.getInstance(getContext());
-        RealmChangeListener listener = new RealmChangeListener() {
+        final Realm realm = looperThread.realm;
+        RealmChangeListener listenerA = new RealmChangeListener() {
             @Override
             public void onChange() {
                 counter.incrementAndGet();
             }
         };
-        realm.addChangeListener(listener);
+        RealmChangeListener listenerB = new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                assertEquals(0, counter.get());
+                assertEquals(1, realm.handlerController.weakChangeListeners.size());
+                looperThread.testComplete();
+            }
+        };
+        realm.handlerController.addChangeListenerAsWeakReference(listenerA);
 
         // There is no guaranteed way to release the WeakReference,
         // just clear it.
-        for (WeakReference<RealmChangeListener> weakRef : realm.getChangeListeners()) {
+        for (WeakReference<RealmChangeListener> weakRef : realm.handlerController.weakChangeListeners) {
             weakRef.clear();
         }
+
+        realm.handlerController.addChangeListenerAsWeakReference(listenerB);
 
         realm.beginTransaction();
         realm.createObject(AllTypes.class);
         realm.commitTransaction();
+    }
 
-        assertEquals(0, counter.get());
-        assertEquals(0, realm.getChangeListeners().size());
+    @Test
+    @RunTestInLooperThread
+    public void realmNotificationOrder() {
+        // Tests that global notifications are called in the order they are added
+        // Test both ways to check accidental ordering from unordered collections.
+        final AtomicInteger listenerACalled = new AtomicInteger(0);
+        final AtomicInteger listenerBCalled = new AtomicInteger(0);
+        final Realm realm = looperThread.realm;
+
+        final RealmChangeListener listenerA = new RealmChangeListener() {
+
+            @Override
+            public void onChange() {
+                int called = listenerACalled.incrementAndGet();
+                if (called == 2) {
+                    assertEquals(2, listenerBCalled.get());
+                    looperThread.testComplete();
+                }
+            }
+        };
+        final RealmChangeListener listenerB = new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                listenerBCalled.incrementAndGet();
+                if (listenerACalled.get() == 1) {
+                    // 2. Reverse order
+                    realm.removeAllChangeListeners();
+                    realm.addChangeListener(this);
+                    realm.addChangeListener(listenerA);
+                    realm.beginTransaction();
+                    realm.commitTransaction();
+
+                }
+            }
+        };
+
+        // 1. Add initial ordering
+        realm.addChangeListener(listenerA);
+        realm.addChangeListener(listenerB);
+
+        realm.beginTransaction();
+        realm.commitTransaction();
     }
 
     // Tests that if the same configuration is used on 2 different Looper threads that each gets its own Handler. This
     // prevents commitTransaction from accidentally posting messages to Handlers which might reference a closed Realm.
-    public void testDoNotUseClosedHandler() throws InterruptedException {
-        final RealmConfiguration realmConfiguration = TestHelper.createConfiguration(getContext());
+    @Test
+    public void doNotUseClosedHandler() throws InterruptedException {
         final AssertionFailedError[] threadAssertionError = new AssertionFailedError[1]; // Keep track of errors in test threads.
-        Realm.deleteRealm(realmConfiguration);
-
         final CountDownLatch handlerNotified = new CountDownLatch(1);
         final CountDownLatch backgroundThreadClosed = new CountDownLatch(1);
 
@@ -505,7 +661,7 @@ public class NotificationsTest extends AndroidTestCase {
             @Override
             public void run() {
                 Looper.prepare();
-                final Realm realm = Realm.getInstance(realmConfiguration);
+                final Realm realm = Realm.getInstance(realmConfig);
                 RealmChangeListener listener = new RealmChangeListener() {
                     @Override
                     public void onChange() {
@@ -523,7 +679,7 @@ public class NotificationsTest extends AndroidTestCase {
             @Override
             public void run() {
                 Looper.prepare();
-                Realm realm = Realm.getInstance(realmConfiguration);
+                Realm realm = Realm.getInstance(realmConfig);
                 RealmChangeListener listener = new RealmChangeListener() {
                     @Override
                     public void onChange() {
@@ -545,7 +701,7 @@ public class NotificationsTest extends AndroidTestCase {
 
         // Any REALM_CHANGED message should now only reach the open Handler on Thread1
         backgroundThreadClosed.await();
-        Realm realm = Realm.getInstance(realmConfiguration);
+        Realm realm = Realm.getInstance(realmConfig);
         realm.beginTransaction();
         realm.commitTransaction();
         try {
@@ -563,10 +719,8 @@ public class NotificationsTest extends AndroidTestCase {
 
     // Test that we handle a Looper thread quiting it's looper before it is done executing the current loop ( = Realm.close()
     // isn't called yet).
-    public void testLooperThreadQuitsLooperEarly() throws InterruptedException {
-        RealmConfiguration config = TestHelper.createConfiguration(getContext());
-        Realm.deleteRealm(config);
-
+    @Test
+    public void looperThreadQuitsLooperEarly() throws InterruptedException {
         final CountDownLatch backgroundLooperStartedAndStopped = new CountDownLatch(1);
         final CountDownLatch mainThreadCommitCompleted = new CountDownLatch(1);
         final CountDownLatch backgroundThreadStopped = new CountDownLatch(1);
@@ -578,9 +732,9 @@ public class NotificationsTest extends AndroidTestCase {
             public void run() {
                 Looper.prepare(); // Fake background thread with a looper, eg. a IntentService
 
-                Realm realm = Realm.getInstance(getContext());
+                Realm realm = Realm.getInstance(realmConfig);
                 realm.setAutoRefresh(false);
-                Looper.myLooper().quit();
+                TestHelper.quitLooperOrFail();
                 backgroundLooperStartedAndStopped.countDown();
                 try {
                     mainThreadCommitCompleted.await();
@@ -593,27 +747,300 @@ public class NotificationsTest extends AndroidTestCase {
         });
 
         // Create a commit on another thread
-        awaitOrThrow(backgroundLooperStartedAndStopped);
-        Realm realm = Realm.getInstance(config);
+        TestHelper.awaitOrFail(backgroundLooperStartedAndStopped);
+        Realm realm = Realm.getInstance(realmConfig);
         Logger logger = TestHelper.getFailureLogger(Log.WARN);
         RealmLog.add(logger);
 
         realm.beginTransaction();
         realm.commitTransaction(); // If the Handler on the background is notified it will trigger a Log warning.
         mainThreadCommitCompleted.countDown();
-        awaitOrThrow(backgroundThreadStopped);
+        TestHelper.awaitOrFail(backgroundThreadStopped);
 
         realm.close();
         RealmLog.remove(logger);
     }
 
-    private void awaitOrThrow(CountDownLatch latch) {
-        try {
-            if (!latch.await(5, TimeUnit.SECONDS)) {
-                fail("Latch timed out " + latch);
+    @Test
+    public void handlerThreadShouldReceiveNotification() throws ExecutionException, InterruptedException {
+        final AssertionFailedError[] assertionFailedErrors = new AssertionFailedError[1];
+        final CountDownLatch backgroundThreadReady = new CountDownLatch(1);
+        final CountDownLatch numberOfInvocation = new CountDownLatch(1);
+
+        HandlerThread handlerThread = new HandlerThread("handlerThread");
+        handlerThread.start();
+        Handler handler = new Handler(handlerThread.getLooper());
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    assertEquals("handlerThread", Thread.currentThread().getName());
+                } catch (AssertionFailedError e) {
+                    assertionFailedErrors[0] = e;
+                }
+                final Realm backgroundRealm = Realm.getInstance(realmConfig);
+                backgroundRealm.addChangeListener(new RealmChangeListener() {
+                    @Override
+                    public void onChange() {
+                        backgroundRealm.close();
+                        numberOfInvocation.countDown();
+                    }
+                });
+                backgroundThreadReady.countDown();
             }
-        } catch (InterruptedException e) {
-            fail("Latch was interrupted " + e);
+        });
+        TestHelper.awaitOrFail(backgroundThreadReady);
+        // At this point the background thread started & registered the listener
+
+        Realm realm = Realm.getInstance(realmConfig);
+        realm.beginTransaction();
+        realm.createObject(AllTypes.class);
+        realm.commitTransaction();
+
+        TestHelper.awaitOrFail(numberOfInvocation);
+        realm.close();
+        handlerThread.quit();
+        if (assertionFailedErrors[0] != null) {
+            throw assertionFailedErrors[0];
         }
+    }
+
+    @Test
+    public void nonLooperThreadShouldNotifyLooperThreadAboutCommit() {
+        final CountDownLatch mainThreadReady = new CountDownLatch(1);
+        final CountDownLatch backgroundThreadClosed = new CountDownLatch(1);
+        final CountDownLatch numberOfInvocation = new CountDownLatch(1);
+        Thread thread = new Thread() {
+            @Override
+            public void run() {
+                TestHelper.awaitOrFail(mainThreadReady);
+                Realm realm = Realm.getInstance(realmConfig);
+                realm.beginTransaction();
+                realm.createObject(AllTypes.class);
+                realm.commitTransaction();
+                realm.close();
+                backgroundThreadClosed.countDown();
+            }
+        };
+        thread.start();
+
+        HandlerThread mainThread = new HandlerThread("mainThread");
+        mainThread.start();
+        Handler handler = new Handler(mainThread.getLooper());
+        handler.post(new Runnable() {
+            @Override
+            public void run() {
+                final Realm mainRealm = Realm.getInstance(realmConfig);
+                mainRealm.addChangeListener(new RealmChangeListener() {
+                    @Override
+                    public void onChange() {
+                        mainRealm.close();
+                        numberOfInvocation.countDown();
+                    }
+                });
+                mainThreadReady.countDown();
+            }
+        });
+
+        TestHelper.awaitOrFail(numberOfInvocation);
+        TestHelper.awaitOrFail(backgroundThreadClosed);
+        mainThread.quit();
+    }
+
+    // The presence of async RealmResults block any `REALM_CHANGE` notification causing historically the Realm
+    // to advance to the latest version. We make sure in this test that all Realm listeners will be notified
+    // regardless of the presence of an async RealmResults that will delay the `REALM_CHANGE` sometimes
+    @Test
+    public void asyncRealmResultsShouldNotBlockBackgroundCommitNotification() throws Throwable {
+        final AtomicInteger numberOfRealmCallbackInvocation = new AtomicInteger(0);
+        final AtomicInteger numberOfAsyncRealmResultsCallbackInvocation = new AtomicInteger(0);
+        final CountDownLatch signalTestFinished = new CountDownLatch(2);
+        final CountDownLatch signalClosedRealm = new CountDownLatch(1);
+        final Realm[] realm = new Realm[1];
+        final Throwable[] threadAssertionError = new Throwable[1];
+        final Looper[] backgroundLooper = new Looper[1];
+        ExecutorService executorService = Executors.newSingleThreadExecutor();
+        executorService.submit(new Runnable() {
+            @Override
+            public void run() {
+                Looper.prepare();
+                backgroundLooper[0] = Looper.myLooper();
+
+                try {
+                    realm[0] = Realm.getInstance(realmConfig);
+                    realm[0].addChangeListener(new RealmChangeListener() {
+                        @Override
+                        public void onChange() {
+                            RealmResults<Dog> dogs; // to keep it as a strong reference
+                            switch (numberOfRealmCallbackInvocation.incrementAndGet()) {
+                                case 1: {
+                                    // first commit
+                                    dogs = realm[0].where(Dog.class).findAllAsync();
+                                    assertTrue(dogs.load());
+                                    dogs.addChangeListener(new RealmChangeListener() {
+                                        @Override
+                                        public void onChange() {
+                                            numberOfAsyncRealmResultsCallbackInvocation.incrementAndGet();
+                                        }
+                                    });
+
+                                    new Thread() {
+                                        @Override
+                                        public void run() {
+                                            Realm realm = Realm.getInstance(realmConfig);
+                                            realm.beginTransaction();
+                                            realm.createObject(Dog.class);
+                                            realm.commitTransaction();
+                                            realm.close();
+                                            signalTestFinished.countDown();
+                                        }
+                                    }.start();
+                                    break;
+                                }
+                                case 2: {
+                                    // finish test
+                                    signalTestFinished.countDown();
+                                    break;
+                                }
+                            }
+                        }
+                    });
+
+                    realm[0].handler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            realm[0].beginTransaction();
+                            realm[0].createObject(Dog.class);
+                            realm[0].commitTransaction();
+                        }
+                    });
+
+                    Looper.loop();
+
+                } catch (Throwable e) {
+                    threadAssertionError[0] = e;
+
+                } finally {
+                    if (realm.length > 0 && realm[0] != null) {
+                        realm[0].close();
+                    }
+                    signalClosedRealm.countDown();
+
+                    if (signalTestFinished.getCount() > 0) {
+                        signalTestFinished.countDown();
+                    }
+                }
+            }
+        });
+
+        TestHelper.exitOrThrow(executorService, signalTestFinished, signalClosedRealm, backgroundLooper, threadAssertionError);
+    }
+
+    // The presence of async RealmResults block any `REALM_CHANGE` notification causing historically the Realm
+    // to advance to the latest version. We make sure in this test that all Realm listeners will be notified
+    // regardless of the presence of an async RealmObject that will delay the `REALM_CHANGE` sometimes
+    @Test
+    @RunTestInLooperThread
+    public void asyncRealmObjectShouldNotBlockBackgroundCommitNotification() {
+        final AtomicInteger numberOfRealmCallbackInvocation = new AtomicInteger(0);
+        final CountDownLatch signalClosedRealm = new CountDownLatch(1);
+        looperThread.realm.addChangeListener(new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                switch (numberOfRealmCallbackInvocation.incrementAndGet()) {
+                    case 1: {
+                        // first commit
+                        Dog dog = looperThread.realm.where(Dog.class).findFirstAsync();
+                        assertTrue(dog.load());
+                        dog.addChangeListener(new RealmChangeListener() {
+                            @Override
+                            public void onChange() {
+                            }
+                        });
+                        looperThread.keepStrongReference.add(dog);
+
+                        new Thread() {
+                            @Override
+                            public void run() {
+                                Realm realm = Realm.getInstance(looperThread.realmConfiguration);
+                                realm.beginTransaction();
+                                realm.createObject(Dog.class);
+                                realm.commitTransaction();
+                                realm.close();
+                                signalClosedRealm.countDown();
+                            }
+                        }.start();
+                        break;
+                    }
+                    case 2: {
+                        // finish test
+                        TestHelper.awaitOrFail(signalClosedRealm);
+                        looperThread.testComplete();
+                        break;
+                    }
+                }
+            }
+        });
+
+        looperThread.postRunnable(new Runnable() {
+            @Override
+            public void run() {
+                looperThread.realm.beginTransaction();
+                looperThread.realm.createObject(Dog.class);
+                looperThread.realm.commitTransaction();
+            }
+        });
+    }
+
+    @Test
+    @RunTestInLooperThread
+    public void realmListenerAddedAfterCommit() {
+        Realm realm = looperThread.realm;
+        realm.beginTransaction();
+        realm.commitTransaction();
+
+        realm.addChangeListener(new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                looperThread.testComplete();
+            }
+        });
+    }
+
+    @Test
+    @RunTestInLooperThread
+    public void realmResultsListenerAddedAfterCommit() {
+        Realm realm = looperThread.realm;
+        RealmResults<AllTypes> results = realm.allObjects(AllTypes.class);
+        realm.beginTransaction();
+        realm.createObject(AllTypes.class);
+        realm.commitTransaction();
+
+        results.addChangeListener(new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                looperThread.testComplete();
+            }
+        });
+    }
+
+    @Test
+    @RunTestInLooperThread
+    public void realmObjectListenerAddedAfterCommit() {
+        Realm realm = looperThread.realm;
+        realm.beginTransaction();
+        AllTypes obj = realm.createObject(AllTypes.class);
+        realm.commitTransaction();
+
+        realm.beginTransaction();
+        obj.setColumnLong(42);
+        realm.commitTransaction();
+
+        obj.addChangeListener(new RealmChangeListener() {
+            @Override
+            public void onChange() {
+                looperThread.testComplete();
+            }
+        });
     }
 }

@@ -38,10 +38,6 @@ public class SharedGroup implements Closeable {
     private boolean activeTransaction;
     private final Context context;
 
-    static {
-        RealmCore.loadLibrary();
-    }
-
     public enum Durability {
         FULL(0),
         MEM_ONLY(1);
@@ -199,7 +195,7 @@ public class SharedGroup implements Closeable {
         activeTransaction = false;
     }
 
-    boolean isClosed() {
+    public boolean isClosed() {
         return nativePtr == 0;
     }
 
@@ -214,7 +210,7 @@ public class SharedGroup implements Closeable {
     /**
      * Compacts a shared group. This will block access to the shared group until done.
      *
-     * @return True if compaction succeeded, false otherwise.
+     * @return {@code true} if compaction succeeded, {@code false} otherwise.
      * @throws RuntimeException if using this within either a read or or write transaction.
      */
     public boolean compact() {
@@ -224,7 +220,7 @@ public class SharedGroup implements Closeable {
     /**
      * Returns the absolute path to the file backing this SharedGroup.
      *
-     * @return Canonical path to the Realm file.
+     * @return the canonical path to the Realm file.
      */
     public String getPath() {
         return path;
@@ -249,7 +245,7 @@ public class SharedGroup implements Closeable {
         return new VersionID (versionId[0], versionId[1]);
 
     }
-    
+
     public static class VersionID implements Comparable<VersionID> {
         final long version;
         final long index;
@@ -276,6 +272,28 @@ public class SharedGroup implements Closeable {
                     "version=" + version +
                     ", index=" + index +
                     '}';
+        }
+
+        @Override
+        public boolean equals(Object object) {
+            if (this == object) return true;
+            if (object == null || getClass() != object.getClass()) return false;
+            if (!super.equals(object)) return false;
+
+            VersionID versionID = (VersionID) object;
+
+            if (version != versionID.version) return false;
+            if (index != versionID.index) return false;
+
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = super.hashCode();
+            result = 31 * result + (int) (version ^ (version >>> 32));
+            result = 31 * result + (int) (index ^ (index >>> 32));
+            return result;
         }
     }
 
