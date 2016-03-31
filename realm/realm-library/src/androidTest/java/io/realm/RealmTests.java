@@ -64,6 +64,7 @@ import io.realm.entities.AnnotationIndexTypes;
 import io.realm.entities.Cat;
 import io.realm.entities.CyclicType;
 import io.realm.entities.CyclicTypePrimaryKey;
+import io.realm.entities.DefaultValues;
 import io.realm.entities.Dog;
 import io.realm.entities.DogPrimaryKey;
 import io.realm.entities.NoPrimaryKeyNullTypes;
@@ -3087,5 +3088,14 @@ public class RealmTests {
         assertEquals(0, realm.where(Owner.class).count());
         assertEquals(0, realm.where(Cat.class).count());
         assertTrue(realm.isEmpty());
+    }
+
+    @Test
+    public void createObject_defaultValues() {
+        realm.beginTransaction();
+        DefaultValues obj = realm.createObject(DefaultValues.class);
+        assertEquals(42, obj.getAge());
+        assertEquals("Foo", obj.getName());
+        assertEquals("Bar", obj.getAddress());
     }
 }

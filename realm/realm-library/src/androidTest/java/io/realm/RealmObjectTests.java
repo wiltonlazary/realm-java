@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import io.realm.entities.AllTypes;
 import io.realm.entities.ConflictingFieldName;
 import io.realm.entities.CyclicType;
+import io.realm.entities.DefaultValues;
 import io.realm.entities.Dog;
 import io.realm.entities.NullTypes;
 import io.realm.entities.StringAndInt;
@@ -1358,5 +1359,13 @@ public class RealmObjectTests {
         assertEquals("listeners_updated", managed.getListeners());
         assertEquals("pendingQuery_updated", managed.getPendingQuery());
         assertEquals("currentTableVersion_updated", managed.getCurrentTableVersion());
+    }
+
+    @Test
+    public void defaultConstructor_standAlone() {
+        DefaultValues obj = new DefaultValues();
+        assertEquals(42, obj.getAge());
+        assertEquals("Foo", obj.getName());
+        assertEquals("Bar", obj.getAddress());
     }
 }
