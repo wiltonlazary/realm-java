@@ -242,7 +242,7 @@ final class HandlerController implements Handler.Callback {
             Map.Entry<WeakReference<RealmObjectProxy>, RealmQuery<?>> next = iterator.next();
             if (next.getKey().get() != null) {
                 Realm.asyncTaskExecutor
-                        .submit(QueryUpdateTask.newBuilder()
+                        .submitQueryUpdate(QueryUpdateTask.newBuilder()
                                 .realmConfiguration(realm.getConfiguration())
                                 .addObject(next.getKey(),
                                         next.getValue().handoverQueryPointer(),
@@ -369,7 +369,7 @@ final class HandlerController implements Handler.Callback {
             QueryUpdateTask queryUpdateTask = realmResultsQueryStep
                     .sendToHandler(realm.handler, COMPLETED_UPDATE_ASYNC_QUERIES)
                     .build();
-            updateAsyncQueriesTask = Realm.asyncTaskExecutor.submit(queryUpdateTask);
+            updateAsyncQueriesTask = Realm.asyncTaskExecutor.submitQueryUpdate(queryUpdateTask);
         }
     }
 
@@ -434,7 +434,7 @@ final class HandlerController implements Handler.Callback {
                                 .sendToHandler(realm.handler, COMPLETED_ASYNC_REALM_RESULTS)
                                 .build();
 
-                        Realm.asyncTaskExecutor.submit(queryUpdateTask);
+                        Realm.asyncTaskExecutor.submitQueryUpdate(queryUpdateTask);
 
                     } else {
                         // UC covered by this test: RealmAsyncQueryTests#testFindAllCallerIsAdvanced
@@ -515,6 +515,17 @@ final class HandlerController implements Handler.Callback {
 
             updateAsyncQueriesTask = null;
         }
+
+        executeAsyncTransactionCallbacks();
+    }
+
+    void executeAsyncTransactionCallbacks() {
+        if (!realm.asyncTransactionCallbacks.isEmpty()) {
+            for (Runnable transactionCallback : realm.asyncTransactionCallbacks) {
+                realm.handler.post(transactionCallback);
+            }
+            realm.asyncTransactionCallbacks.clear();
+        }
     }
 
     private void completedAsyncRealmObject(QueryUpdateTask.Result result) {
@@ -566,7 +577,7 @@ final class HandlerController implements Handler.Callback {
                                 .sendToHandler(realm.handler, COMPLETED_ASYNC_REALM_OBJECT)
                                 .build();
 
-                        Realm.asyncTaskExecutor.submit(queryUpdateTask);
+                        Realm.asyncTaskExecutor.submitQueryUpdate(queryUpdateTask);
                     }
                 } else {
                     // should not happen, since the the background thread position itself against the provided version
@@ -584,7 +595,7 @@ final class HandlerController implements Handler.Callback {
      * @return {@code true} if there is at least one (non GC'ed) instance of {@link RealmResults} {@code false}
      * otherwise.
      */
-    private boolean threadContainsAsyncQueries() {
+    boolean threadContainsAsyncQueries() {
         boolean isEmpty = true;
         Iterator<Map.Entry<WeakReference<RealmResults<? extends RealmModel>>, RealmQuery<?>>> iterator = asyncRealmResults.entrySet().iterator();
         while (iterator.hasNext()) {

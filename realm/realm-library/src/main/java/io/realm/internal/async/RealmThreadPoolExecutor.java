@@ -16,6 +16,10 @@
 
 package io.realm.internal.async;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Future;
@@ -38,6 +42,7 @@ public class RealmThreadPoolExecutor extends ThreadPoolExecutor {
     private boolean isPaused;
     private ReentrantLock pauseLock = new ReentrantLock();
     private Condition unpaused = pauseLock.newCondition();
+    private List<Future<?>> transactions = Collections.synchronizedList(new ArrayList<Future<?>>());
 
     /**
      * Creates a default RealmThreadPool that is bounded by the number of available cores.
@@ -59,19 +64,23 @@ public class RealmThreadPoolExecutor extends ThreadPoolExecutor {
                 new ArrayBlockingQueue<Runnable>(QUEUE_SIZE));
     }
 
-    @Override
-    public Future<?> submit(Runnable task) {
+    public Future<?> submitTransaction(Runnable task) {
+        Future<?> future = super.submit(new BgPriorityRunnable(task));
+        transactions.add(future);
+        return future;
+    }
+
+    public Future<?> submitQueryUpdate(Runnable task) {
         return super.submit(new BgPriorityRunnable(task));
     }
 
-    @Override
-    public <T> Future<T> submit(Callable<T> task) {
+    public <T> Future<T> submitQuery(Callable<T> task) {
         return super.submit(new BgPriorityCallable<T>(task));
     }
 
     @Override
     protected void beforeExecute(Thread t, Runnable r) {
-            super.beforeExecute(t, r);
+        super.beforeExecute(t, r);
         pauseLock.lock();
         try {
             while (isPaused) unpaused.await();
@@ -79,6 +88,27 @@ public class RealmThreadPoolExecutor extends ThreadPoolExecutor {
             t.interrupt();
         } finally {
             pauseLock.unlock();
+        }
+    }
+
+    @Override
+    protected void afterExecute(Runnable r, Throwable t) {
+        super.afterExecute(r, t);
+        cleanupTransactions();
+    }
+
+    public boolean hasPendingTransactions() {
+        cleanupTransactions();
+        return !transactions.isEmpty();
+    }
+
+    private void cleanupTransactions() {
+        Iterator<Future<?>> iterator = transactions.iterator();
+        if (iterator.hasNext()) {
+            Future<?> future = iterator.next();
+            if (future.isCancelled() || future.isDone()) {
+                iterator.remove();
+            }
         }
     }
 
