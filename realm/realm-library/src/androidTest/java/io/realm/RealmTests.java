@@ -1237,7 +1237,7 @@ public class RealmTests {
         childObj.setName("Child");
         childObj.setId(1);
 
-        // Parent object is a standalone object
+        // Parent object is an unmanaged object
         CyclicTypePrimaryKey parentObj = new CyclicTypePrimaryKey(2);
         parentObj.setObject(childObj);
 
@@ -1503,7 +1503,7 @@ public class RealmTests {
     }
 
 
-    // Checks that a standalone object with only default values can override data
+    // Checks that an unmanaged object with only default values can override data
     @Test
     public void copyToRealmOrUpdate_defaultValuesOverrideExistingData() {
         realm.executeTransaction(new Realm.Transaction() {
@@ -1884,20 +1884,9 @@ public class RealmTests {
 
     @Test
     public void deleteRealm() throws InterruptedException {
-        File tempDir = new File(context.getFilesDir(), "delete_test_dir");
-        if (!tempDir.exists()) {
-            assertTrue(tempDir.mkdir());
-        }
-
-        assertTrue(tempDir.isDirectory());
-
-        // Delete all files in the directory
-        File[] files = tempDir.listFiles();
-        if (files != null) {
-            for (File file : files) {
-                assertTrue(file.delete());
-            }
-        }
+        File tempDir = new File(configFactory.getRoot(), "delete_test_dir");
+        File tempDirRenamed = new File(configFactory.getRoot(), "delete_test_dir_2");
+        assertTrue(tempDir.mkdir());
 
         final RealmConfiguration configuration = new RealmConfiguration.Builder(tempDir).build();
 
@@ -1922,14 +1911,15 @@ public class RealmTests {
         realm.beginTransaction();
         realm.createObject(AllTypes.class);
         realm.commitTransaction();
+        // A core upgrade might change the location of the files
+        assertTrue(tempDir.renameTo(tempDirRenamed));
         readyToCloseLatch.countDown();
+
         realm.close();
         closedLatch.await();
+        // Now we get log files back!
+        assertTrue(tempDirRenamed.renameTo(tempDir));
 
-        // ATTENTION: log, log_a, log_b will be deleted when the other thread close the Realm peacefully. And we force
-        // user to close all Realm instances before deleting. It would be difficult to simulate a case that log files
-        // exist before deletion. Let's keep the case like this for now, we might allow user to delete Realm even there
-        // are instances opened in the future.
         assertTrue(Realm.deleteRealm(configuration));
 
         // Directory should be empty now
@@ -1940,7 +1930,7 @@ public class RealmTests {
     @Test
     public void callMutableMethodOutsideTransaction() throws JSONException, IOException {
 
-        // Prepare standalone object data
+        // Prepare unmanaged object data
         AllTypesPrimaryKey t = new AllTypesPrimaryKey();
         List<AllTypesPrimaryKey> ts = Arrays.asList(t, t);
 
@@ -2508,24 +2498,24 @@ public class RealmTests {
     public void copyFromRealm() {
         populateTestRealm();
         AllTypes realmObject = realm.where(AllTypes.class).findAllSorted("columnLong").first();
-        AllTypes standaloneObject = realm.copyFromRealm(realmObject);
-        assertArrayEquals(realmObject.getColumnBinary(), standaloneObject.getColumnBinary());
-        assertEquals(realmObject.getColumnString(), standaloneObject.getColumnString());
-        assertEquals(realmObject.getColumnLong(), standaloneObject.getColumnLong());
-        assertEquals(realmObject.getColumnFloat(), standaloneObject.getColumnFloat(), 0.00000000001);
-        assertEquals(realmObject.getColumnDouble(), standaloneObject.getColumnDouble(), 0.00000000001);
-        assertEquals(realmObject.isColumnBoolean(), standaloneObject.isColumnBoolean());
-        assertEquals(realmObject.getColumnDate(), standaloneObject.getColumnDate());
+        AllTypes unmanagedObject = realm.copyFromRealm(realmObject);
+        assertArrayEquals(realmObject.getColumnBinary(), unmanagedObject.getColumnBinary());
+        assertEquals(realmObject.getColumnString(), unmanagedObject.getColumnString());
+        assertEquals(realmObject.getColumnLong(), unmanagedObject.getColumnLong());
+        assertEquals(realmObject.getColumnFloat(), unmanagedObject.getColumnFloat(), 0.00000000001);
+        assertEquals(realmObject.getColumnDouble(), unmanagedObject.getColumnDouble(), 0.00000000001);
+        assertEquals(realmObject.isColumnBoolean(), unmanagedObject.isColumnBoolean());
+        assertEquals(realmObject.getColumnDate(), unmanagedObject.getColumnDate());
     }
 
     @Test
     public void copyFromRealm_newCopyEachTime() {
         populateTestRealm();
         AllTypes realmObject = realm.where(AllTypes.class).findAllSorted("columnLong").first();
-        AllTypes standaloneObject1 = realm.copyFromRealm(realmObject);
-        AllTypes standaloneObject2 = realm.copyFromRealm(realmObject);
-        assertFalse(standaloneObject1 == standaloneObject2);
-        assertNotSame(standaloneObject1, standaloneObject2);
+        AllTypes unmanagedObject1 = realm.copyFromRealm(realmObject);
+        AllTypes unmanagedObject2 = realm.copyFromRealm(realmObject);
+        assertFalse(unmanagedObject1 == unmanagedObject2);
+        assertNotSame(unmanagedObject1, unmanagedObject2);
     }
 
     // Test that the object graph is copied as it is and no extra copies are made
